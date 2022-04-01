@@ -297,6 +297,7 @@ fork(void)
 
   release(&np->lock);
 
+  np->mask = p->mask;
   return pid;
 }
 
@@ -692,4 +693,16 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 get_unused_proc()
+{
+  struct proc *p;
+  uint64 num = 0;
+  for (p = proc; p < &proc[NPROC]; p ++) {
+	//printf("dead\n");
+	if (p->state != UNUSED)
+	  num ++;	
+  }
+  return num;
 }
