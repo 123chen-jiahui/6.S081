@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -14,6 +16,44 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+void
+uvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(pagetable, va, sz, pa, perm) != 0)
+    panic("uvmmap");
+}
+
+
+pagetable_t
+proc_kpagetable(void)
+{
+	pagetable_t kpagetable = uvmcreate();
+			
+	// uart registers
+  uvmmap(kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  uvmmap(kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  // uvmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  uvmmap(kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  uvmmap(kpagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  uvmmap(kpagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  uvmmap(kpagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+	return kpagetable;
+}
 
 /*
  * create a direct-map page table for the kernel.
@@ -132,7 +172,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->kernel_pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -439,4 +479,34 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+void vmprint(pagetable_t pagetable)
+{
+	static int flag = 0;
+	static int level = 2;
+
+	if (level < 0)
+		return;
+	if (!flag) {
+		printf("page table %p\n", pagetable);
+		flag = 1;
+	}
+	for (int i = 0; i < 512; i ++) {
+		pte_t pte = pagetable[i];
+		if (pte & PTE_V) {
+			if (level == 2)
+				printf("..");
+			else if (level == 1)
+				printf(".. ..");
+			else
+				printf(".. .. ..");
+
+			uint64 child = PTE2PA(pte);
+			printf("%d: pte %p pa %p\n", i, pte, child);
+			level -= 1;
+			vmprint((pagetable_t)child);
+			level += 1;
+		}
+	}
 }
