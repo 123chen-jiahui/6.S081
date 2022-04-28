@@ -23,6 +23,8 @@ struct {
   struct run *freelist;
 } kmem;
 
+//initializes the free list to hold every page between
+//the end of the kernel and PHYSTOP
 void
 kinit()
 {
@@ -34,7 +36,7 @@ void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
+  p = (char*)PGROUNDUP((uint64)pa_start); //将pa_start向上对齐4096，因为“a PTE can only refer to a physical address that is aligned on a 4096-byte boundary (is a multiple of 4096)"
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
 }

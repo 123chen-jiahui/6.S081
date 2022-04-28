@@ -6,8 +6,6 @@
 #include "proc.h"
 #include "defs.h"
 
-extern pagetable_t kernel_pagetable;
-
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -30,9 +28,10 @@ procinit(void)
   struct proc *p;
   
   initlock(&pid_lock, "nextpid");
+	// 一个疑问，为啥直接全部都映射了，而不是按需映射
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
-
+			
 			/*
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
@@ -40,8 +39,10 @@ procinit(void)
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      uint64 va = KSTACK((int) (p - proc)); // 函数宏，定义在memlayout.h，定义里面有2*PGSIZE的空间，猜测有一页是分给guard page的
+      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W); // 只映射了一页，是否可以说明上述猜想？
+			// 以上问题已破案
+			// 手册34页明确说:......KSTACK which leaves the room for the invalid stack-guard pages.这启示我们手册一定要多看，看一遍是不够的
       p->kstack = va;
 			*/
   }
@@ -125,16 +126,16 @@ found:
     return 0;
   }
 
-	// proc's kernel pagetable
-	p->kernel_pagetable = proc_kpagetable();
-	// mapping the kernel stack
+
+	// Allocate a kernel_pagetable
+	p->kernel_pagetable = proc_kpagetable();			
+	// 映射kernel stack
 	char *pa = kalloc();
 	if (pa == 0)
 		panic("kalloc");
 	uint64 va = KSTACK((int) (p - proc));
 	uvmmap(p->kernel_pagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
 	p->kstack = va;
-
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -155,17 +156,23 @@ freeproc(struct proc *p)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
 
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
-
-	
+	//一个疑问，必须先free p->stack再释放p->kernel_pagetable
+	//否则出错
+	//猜想：kstack是依赖与进程的kernel_pagetable而存在的，如果先free
+	//p->kernel_pagetable，那么就找不到kstack所对应的pa了
+	//free pages of kernel stack
 	if (p->kstack)
 		uvmunmap(p->kernel_pagetable, p->kstack, 1, 1);
-	p->kstack = 0;	
-	
+	p->kstack = 0;
+
+	//my answer
 	if (p->kernel_pagetable)
 		proc_freekpagetable(p->kernel_pagetable, 2);
+	p->kernel_pagetable = 0;
 
+	
+  if(p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -227,13 +234,14 @@ proc_freekpagetable(pagetable_t pagetable, int level)
 		return;
 	for (int i = 0; i < 512; i ++) {
 		pte_t pte = pagetable[i];
-		if (pte & PTE_V) {
+		if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
 			uint64 child = PTE2PA(pte);
 			proc_freekpagetable((pagetable_t)child, level - 1);
 			pagetable[i] = 0;
 		}
 	}
-	kfree((void *)pagetable);
+	kfree(pagetable);
+	pagetable = 0;
 }
 
 // a user program that calls exec("/init")
@@ -266,6 +274,10 @@ userinit(void)
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
+#ifdef LAB3_PGTBL
+	user2kpagetable(p->kernel_pagetable, p->pagetable, 0, p->sz);
+#endif
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
@@ -283,6 +295,7 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+	uint64 oldsz = sz;
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
@@ -291,6 +304,11 @@ growproc(int n)
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+
+#ifdef LAB3_PGTBL
+	user2kpagetable(p->kernel_pagetable, p->pagetable, oldsz, p->sz);
+#endif
+
   return 0;
 }
 
@@ -323,6 +341,10 @@ fork(void)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
+
+#ifdef LAB3_PGTBL
+	user2kpagetable(np->kernel_pagetable, np->pagetable, 0, np->sz);
+#endif
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -513,27 +535,27 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
+
         c->proc = p;
 
+				// my answer
 				w_satp(MAKE_SATP(p->kernel_pagetable));
 				sfence_vma();
 
-        swtch(&c->context, &p->context);
+        swtch(&c->context, &p->context); // 上下文切换？
 
-				kvminithart();
+				kvminithart(); // 恢复kernel
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
 
-        found = 1;
+        found = 1; // 找到了一个RUNNABLE的进程
       }
       release(&p->lock);
     }
 #if !defined (LAB_FS)
     if(found == 0) {
-			// w_satp(MAKE_SATP(kernel_pagetable));
-			// sfence_vma();
       intr_on();
       asm volatile("wfi");
     }

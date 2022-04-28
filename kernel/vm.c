@@ -17,19 +17,11 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
-void
-uvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
-{
-  if(mappages(pagetable, va, sz, pa, perm) != 0)
-    panic("uvmmap");
-}
-
-
 pagetable_t
 proc_kpagetable(void)
 {
 	pagetable_t kpagetable = uvmcreate();
-			
+
 	// uart registers
   uvmmap(kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
@@ -37,7 +29,7 @@ proc_kpagetable(void)
   uvmmap(kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
   // CLINT
-  // uvmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  uvmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 
   // PLIC
   uvmmap(kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
@@ -111,17 +103,27 @@ kvminithart()
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
+	/*我觉得破案了*/
+	//pagetable_t的声明在riscv.h中，为：typedef uint64 *pagetable_t;
+	//注意是pagetable_t是64位的，也就是说，pagetable的基类型是64位的
+	//所以pagetable+1实际上会让地址+64，pagetable[n]等价与地址+64×n
+	//一个page table4096byte，有512个单元，每个单元64位
+	//难怪ppn后要加12个0,每12个就表示4096byte
+	//这个函数最好结合riscv.h看
   if(va >= MAXVA)
     panic("walk");
 
+	//强烈建议区分pagetable中的值和地址
+	//地址是用来索引的，比如0..511，通过数组的方法
+	//而这里面的值才是存的下一级pagetable的地址。
   for(int level = 2; level > 0; level--) {
-    pte_t *pte = &pagetable[PX(level, va)];
-    if(*pte & PTE_V) {
-      pagetable = (pagetable_t)PTE2PA(*pte);
-    } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+    pte_t *pte = &pagetable[PX(level, va)]; //得到the address of the PTE,注意是address！！
+    if(*pte & PTE_V) { //如果已经建立映射
+      pagetable = (pagetable_t)PTE2PA(*pte); //得到下一级的pagetable地址
+    } else { //否则通过动态内存申请建立一个新的pagetable
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0) //分配不成功
         return 0;
-      memset(pagetable, 0, PGSIZE);
+      memset(pagetable, 0, PGSIZE); 
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
@@ -161,6 +163,12 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
     panic("kvmmap");
 }
 
+void uvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+	if (mappages(pagetable, va, sz, pa, perm) != 0)
+		panic("uvmmap");
+}
+
 // translate a kernel virtual address to
 // a physical address. only needed for
 // addresses on the stack.
@@ -191,18 +199,18 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   uint64 a, last;
   pte_t *pte;
 
-  a = PGROUNDDOWN(va);
+  a = PGROUNDDOWN(va); //函数宏，在riscv.h中定义，能将va的低12位置0
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
-    if((pte = walk(pagetable, a, 1)) == 0)
+    if((pte = walk(pagetable, a, 1)) == 0) //to find the address of the PTE for the virtual address to be mapped
       return -1;
-    if(*pte & PTE_V)
+    if(*pte & PTE_V) //如果最后一位是1（即该地址是有效的），说明映射已经建立，不能重复映射
       panic("remap");
-    *pte = PA2PTE(pa) | perm | PTE_V;
+    *pte = PA2PTE(pa) | perm | PTE_V; //否则往地址中写入，并将最后一位置1,表示将其映射,这一步很妙，关键就是在这一步上实现的映射。pte是最后一级pagetabel中某个单元的地址，pa是最终映射到的physical address，将pa从PA转换为PTE，并将最后一位置为valid(不过perm是啥意思没搞懂)
     if(a == last)
       break;
-    a += PGSIZE;
-    pa += PGSIZE;
+    a += PGSIZE; //文档里写了：	at page intervals.即按照PGSIZE的间隔对va和pa进行映射
+    pa += PGSIZE; //由于是恒定映射，所以pa和a的变化相等
   }
   return 0;
 }
@@ -289,6 +297,27 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
     }
   }
   return newsz;
+}
+
+void
+user2kpagetable(pagetable_t kpagetable, pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+	if (newsz >= PLIC)
+		panic("user2pagetable: too big sz");
+
+	for (int i = oldsz; i < newsz; i += PGSIZE) {
+		pte_t *upte = walk(pagetable, i, 0);
+		if (upte == 0) {
+			panic("user2kpagetable: unmaped va");
+		}
+		if ((*upte & PTE_V) == 0) {
+			panic("user2kpagetable: invalid va");
+		}
+		
+		pte_t *kpte = walk(kpagetable, i, 1);
+		*kpte = *upte;
+		*kpte = *kpte & ~PTE_U;
+	}
 }
 
 // Deallocate user pages to bring the process size from oldsz to
@@ -419,23 +448,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
-
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+	return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -445,46 +458,14 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+	return copyinstr_new(pagetable, dst, srcva, max);
 }
 
-void vmprint(pagetable_t pagetable)
+void
+vmprint(pagetable_t pagetable)
 {
 	static int flag = 0;
-	static int level = 2;
+	static int level = 2; //表示pagetable所在的level
 
 	if (level < 0)
 		return;
@@ -495,6 +476,7 @@ void vmprint(pagetable_t pagetable)
 	for (int i = 0; i < 512; i ++) {
 		pte_t pte = pagetable[i];
 		if (pte & PTE_V) {
+
 			if (level == 2)
 				printf("..");
 			else if (level == 1)
@@ -506,7 +488,7 @@ void vmprint(pagetable_t pagetable)
 			printf("%d: pte %p pa %p\n", i, pte, child);
 			level -= 1;
 			vmprint((pagetable_t)child);
-			level += 1;
+			level += 1; //恢复现场
 		}
 	}
 }

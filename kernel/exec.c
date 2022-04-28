@@ -71,7 +71,7 @@ exec(char *path, char **argv)
   if((sz1 = uvmalloc(pagetable, sz, sz + 2*PGSIZE)) == 0)
     goto bad;
   sz = sz1;
-  uvmclear(pagetable, sz-2*PGSIZE);
+  uvmclear(pagetable, sz-2*PGSIZE); // make guard page page invalid for user access
   sp = sz;
   stackbase = sp - PGSIZE;
 
@@ -115,6 +115,10 @@ exec(char *path, char **argv)
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+
+#ifdef LAB3_PGTBL
+	user2kpagetable(p->kernel_pagetable, p->pagetable, 0, p->sz);
+#endif
 
 	if (p->pid == 1)
 		vmprint(p->pagetable);

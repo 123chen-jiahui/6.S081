@@ -323,8 +323,8 @@ sfence_vma()
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page
 
-#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
-#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
+#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1)) //向上将sz的低12位全部置为0,即向上对齐4096
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1)) //向下将a的低12位全部置为0，即向下对其4096
 
 #define PTE_V (1L << 0) // valid
 #define PTE_R (1L << 1)
@@ -333,16 +333,15 @@ sfence_vma()
 #define PTE_U (1L << 4) // 1 -> user can access
 
 // shift a physical address to the right place for a PTE.
-#define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
+#define PA2PTE(pa) ((((uint64)pa) >> 12) << 10) //将pa转换为pte
+#define PTE2PA(pte) (((pte) >> 10) << 12) //扔掉后面的10位表示状态的位，并在末尾加上12个0,得到下一个level的table的pa
 
-#define PTE2PA(pte) (((pte) >> 10) << 12)
-
-#define PTE_FLAGS(pte) ((pte) & 0x3FF)
+#define PTE_FLAGS(pte) ((pte) & 0x3FF) // 留下后10位
 
 // extract the three 9-bit page table indices from a virtual address.
 #define PXMASK          0x1FF // 9 bits
-#define PXSHIFT(level)  (PGSHIFT+(9*(level)))
-#define PX(level, va) ((((uint64) (va)) >> PXSHIFT(level)) & PXMASK)
+#define PXSHIFT(level)  (PGSHIFT+(9*(level))) //为什么这里要这么写，因为level2需要高9位，level1需要中9位，level0需要低9位,加上最低的offset18位就可以解释了。
+#define PX(level, va) ((((uint64) (va)) >> PXSHIFT(level)) & PXMASK) // 取出level对应的9位，将前25位ETX抛弃
 
 // one beyond the highest possible virtual address.
 // MAXVA is actually one bit less than the max allowed by
