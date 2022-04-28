@@ -115,8 +115,24 @@ printf(char *fmt, ...)
 }
 
 void
+backtrace(void)
+{
+	printf("backtrace:\n");
+	uint64 fp = r_fp();
+	uint64 botton = PGROUNDDOWN(fp);
+	uint64 top = PGROUNDUP(fp);
+	while (fp > botton && fp < top) {
+		printf("%p\n", *(uint64 *)(fp - 8));
+		if (fp - 16 < botton)
+			break;
+		fp = *(uint64 *)(fp - 16);
+	}
+}
+
+void
 panic(char *s)
 {
+	backtrace(); // 感觉挺有用的see the kernel's backtrace when it panics 
   pr.locking = 0;
   printf("panic: ");
   printf(s);
