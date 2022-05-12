@@ -92,7 +92,6 @@ countfree()
     *(char *)(a + 4096 - 1) = 1;
     n += 1;
   }
-	printf("hello\n");
   sbrk(-((uint64)sbrk(0) - sz0));
   return n;
 }
