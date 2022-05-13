@@ -23,7 +23,7 @@
 #include "fs.h"
 #include "buf.h"
 
-#define NBUCKET 29
+#define NBUCKET 13 
 
 struct bucket {
 	struct spinlock lock;
@@ -96,6 +96,7 @@ bget(uint dev, uint blockno)
 		// printf("ni hao\n");
 		if (b->dev == dev && b->blockno == blockno) {
 			b->refcnt ++;
+			// b->ticks = ticks;
 			release(&bcache.hash_table[addr].lock);
 			acquiresleep(&b->lock);
 			// printf("enter\n");
@@ -122,6 +123,7 @@ bget(uint dev, uint blockno)
 		b->blockno = blockno;
 		b->valid = 0;
 		b->refcnt = 1;
+		// b->ticks = ticks;
 		release(&bcache.hash_table[addr].lock);
 		acquiresleep(&b->lock);
 		return b;
@@ -170,6 +172,7 @@ bget(uint dev, uint blockno)
 		b->blockno = blockno;
 		b->valid = 0;
 		b->refcnt = 1;
+		// b->ticks = ticks;
 		release(&bcache.hash_table[addr].lock);
 		acquiresleep(&b->lock);
 		return b;
