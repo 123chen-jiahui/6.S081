@@ -491,3 +491,4 @@ nulterminate(struct cmd *cmd)
   }
   return cmd;
 }
+
