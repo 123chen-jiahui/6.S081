@@ -68,19 +68,19 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
+  for(b = 0; b < sb.size; b += BPB){ // 枚举bitmap的每一页
     bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){ // 枚举该block中的每一位，看看有没有空闲的block
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
         bp->data[bi/8] |= m;  // Mark block in use.
         log_write(bp);
         brelse(bp);
         bzero(dev, b + bi);
-        return b + bi;
+        return b + bi; // 返回的bnum
       }
     }
-    brelse(bp);
+    brelse(bp); // 释放在bread调用的bget获得的锁
   }
   panic("balloc: out of blocks");
 }
@@ -92,9 +92,9 @@ bfree(int dev, uint b)
   struct buf *bp;
   int bi, m;
 
-  bp = bread(dev, BBLOCK(b, sb));
-  bi = b % BPB;
-  m = 1 << (bi % 8);
+  bp = bread(dev, BBLOCK(b, sb)); // 找到b对应的bitmap block
+  bi = b % BPB; // 在该block中找到对应的bit
+  m = 1 << (bi % 8); // 找到该bit所在的byte
   if((bp->data[bi/8] & m) == 0)
     panic("freeing free block");
   bp->data[bi/8] &= ~m;

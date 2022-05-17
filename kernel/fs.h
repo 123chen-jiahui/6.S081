@@ -48,7 +48,7 @@ struct dinode {
 #define BPB           (BSIZE*8)
 
 // Block of free map containing bit for block b
-#define BBLOCK(b, sb) ((b)/BPB + sb.bmapstart)
+#define BBLOCK(b, sb) ((b)/BPB + sb.bmapstart) // 功能：给定blockno b，得到反应该block是否空闲的bitmap block的blockno
 
 // Directory is a file containing a sequence of dirent structures.
 #define DIRSIZ 14
