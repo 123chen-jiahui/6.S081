@@ -119,7 +119,7 @@ fileread(struct file *f, uint64 addr, int n)
     r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_INODE){
     ilock(f->ip);
-    if((r = readi(f->ip, 1, addr, f->off, n)) > 0)
+    if((r = readi(f->ip, 1, addr, f->off, n)) > 0) // addr是用户的地址，所以readi的第二个参数需要是1
       f->off += r;
     iunlock(f->ip);
   } else {

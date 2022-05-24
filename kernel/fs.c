@@ -387,6 +387,46 @@ bmap(struct inode *ip, uint bn)
   }
   bn -= NDIRECT;
 
+	if(bn < NINDIRECT){
+    // Load indirect block, allocating if necessary.
+    if((addr = ip->addrs[NDIRECT]) == 0)
+      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn]) == 0){
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+	bn -= NINDIRECT;
+
+	if (bn < NDOUBLE) {
+		// bmap 第一级目录
+		if ((addr = ip->addrs[NDIRECT + 1]) == 0)
+			ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+		bp = bread(ip->dev, addr);
+		a = (uint*)bp->data;
+		// bmap 第二级目录
+		int num_single_block = bn / NINDIRECT;
+		int left = bn % NINDIRECT;
+		if ((addr = a[num_single_block]) == 0) {
+			a[num_single_block] = addr = balloc(ip->dev);
+			log_write(bp);
+		}
+		brelse(bp);
+		bp = bread(ip->dev, addr);
+		a = (uint*)bp->data;
+		if ((addr = a[left]) == 0) {
+			a[left] = addr = balloc(ip->dev);
+			log_write(bp);
+		}
+		brelse(bp);
+		return addr;
+	}
+
+	/*
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
@@ -400,6 +440,7 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+	*/
 
   panic("bmap: out of range");
 }
@@ -432,6 +473,30 @@ itrunc(struct inode *ip)
     ip->addrs[NDIRECT] = 0;
   }
 
+	// 释放二级目录
+	if (ip->addrs[NDIRECT + 1]) {
+		struct buf *out_bp;
+		uint *out_a;
+		out_bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+		out_a = (uint*)out_bp->data;
+		for (i = 0; i < NINDIRECT; i ++) {
+			if (out_a[i]) {
+				bp = bread(ip->dev, out_a[i]);
+				a = (uint*)bp->data;
+				for (j = 0; j < NINDIRECT; j ++) {
+					if (a[j])
+						bfree(ip->dev, a[j]);
+				}
+				brelse(bp);
+				bfree(ip->dev, out_a[i]);
+				// out_a[i] = 0;
+			}
+		}
+		brelse(out_bp);
+		bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+		ip->addrs[NDIRECT + 1] = 0;
+	}
+
   ip->size = 0;
   iupdate(ip);
 }
@@ -452,6 +517,8 @@ stati(struct inode *ip, struct stat *st)
 // Caller must hold ip->lock.
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
+// 返回值为读到的字节数tot
+// off表示偏移量，n表示指定读的字节数
 int
 readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 {
@@ -530,22 +597,22 @@ struct inode*
 dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
-  struct dirent de;
+  struct dirent de; // dir entry
 
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
 
   for(off = 0; off < dp->size; off += sizeof(de)){
-    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)) // 参数0表示目标地址&de在内核地址空间,either_copyout时会用到
       panic("dirlookup read");
-    if(de.inum == 0)
+    if(de.inum == 0) // 无效目录项
       continue;
-    if(namecmp(name, de.name) == 0){
+    if(namecmp(name, de.name) == 0){ // 找到名字匹配的目录项
       // entry matches path element
       if(poff)
-        *poff = off;
-      inum = de.inum;
-      return iget(dp->dev, inum);
+        *poff = off; // 将目录项偏移值通过*poff返回
+      inum = de.inum; // 确定索引结点编号
+      return iget(dp->dev, inum); // 建立inode缓存(可能还需要读盘)
     }
   }
 

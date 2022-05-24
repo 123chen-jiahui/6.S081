@@ -651,9 +651,9 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
   struct proc *p = myproc();
   if(user_dst){
-    return copyout(p->pagetable, dst, src, len);
+    return copyout(p->pagetable, dst, src, len); // 若dst是一个用户地址，由于是在内核，所以需要传入用户pagetable
   } else {
-    memmove((char *)dst, src, len);
+    memmove((char *)dst, src, len); // 若dst是一个内核地址，由于是在内核，所以直接解引用即可，不需要给出kernel pagetable
     return 0;
   }
 }
