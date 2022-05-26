@@ -85,6 +85,30 @@ balloc(uint dev)
   panic("balloc: out of blocks");
 }
 
+uint
+lazy_balloc(uint dev)
+{
+  int b, bi, m;
+  struct buf *bp;
+
+  bp = 0;
+  for(b = 0; b < sb.size; b += BPB){ // 枚举bitmap的每一页
+    bp = bread(dev, BBLOCK(b, sb));
+    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){ // 枚举该block中的每一位，看看有没有空闲的block
+      m = 1 << (bi % 8);
+      if((bp->data[bi/8] & m) == 0){  // Is block free?
+        bp->data[bi/8] |= m;  // Mark block in use.
+        log_write(bp);
+        brelse(bp);
+        bzero(dev, b + bi);
+        return b + bi; // 返回的bnum
+      }
+    }
+    brelse(bp); // 释放在bread调用的bget获得的锁
+  }
+  panic("balloc: out of blocks");
+}
+
 // Free a disk block.
 static void
 bfree(int dev, uint b)
@@ -293,8 +317,9 @@ ilock(struct inode *ip)
 
   if(ip == 0 || ip->ref < 1)
     panic("ilock");
-
+	// printf("before\n");
   acquiresleep(&ip->lock);
+	// printf("after\n");
 
   if(ip->valid == 0){
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
@@ -739,3 +764,27 @@ nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
 }
+
+/*
+uint64
+symlink(char target[], char linkpath[])
+{
+	struct inode *ip;
+	struct buf *bp;
+	struct buf *inner_bp;
+	struct dinode *dip;
+	uint addr, *a;
+	if ((ip = create(path, T_SYMLINK, 0, 0) == 0) // 申请一个inode用来存新的符号链接文件
+			return -1;
+	// bp = bread(ip->dev, IBLOCK(ip->inum, sb)); // 缓存刚申请的inode所在的block
+	// dip = (struct dinode*)bp->data + ip->inum % IPB; // 得到
+  if ((addr = ip->addrs[0]) == 0)
+		ip->addrs[0] = addr = balloc(ip->dev);			
+	bp = bread(ip->dev, addr);
+	memmove(bp->data, target, sizeof(target));
+	iupdate(ip); // 将这个inode存盘
+	log_write(bp); // 将这个block存盘
+	brelse(bp);
+	return 0;
+}
+*/

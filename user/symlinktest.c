@@ -44,7 +44,9 @@ cleanup(void)
 static int
 stat_slink(char *pn, struct stat *st)
 {
+	// printf("ahahah\n");
   int fd = open(pn, O_RDONLY | O_NOFOLLOW);
+	// printf("hahaha\n");
   if(fd < 0)
     return -1;
   if(fstat(fd, st) != 0)
@@ -63,29 +65,31 @@ testsymlink(void)
   printf("Start: test symlinks\n");
 
   mkdir("/testsymlink");
-
+	printf("aaaaaa\n");
   fd1 = open("/testsymlink/a", O_CREATE | O_RDWR);
   if(fd1 < 0) fail("failed to open a");
 
+	// printf("hello\n");
   r = symlink("/testsymlink/a", "/testsymlink/b");
   if(r < 0)
     fail("symlink b -> a failed");
-
+	// printf("hi\n");
   if(write(fd1, buf, sizeof(buf)) != 4)
     fail("failed to write to a");
-
+	// printf("?\n");
   if (stat_slink("/testsymlink/b", &st) != 0)
     fail("failed to stat b");
+	// printf("??\n");
   if(st.type != T_SYMLINK)
     fail("b isn't a symlink");
-
+	// printf("here\n");
   fd2 = open("/testsymlink/b", O_RDWR);
   if(fd2 < 0)
     fail("failed to open b");
   read(fd2, &c, 1);
   if (c != 'a')
     fail("failed to read bytes from b");
-
+	
   unlink("/testsymlink/a");
   if(open("/testsymlink/b", O_RDWR) >= 0)
     fail("Should not be able to open b after deleting a");
@@ -147,8 +151,9 @@ concur(void)
     exit(1);
   }
   close(fd);
-
+	printf("hellohi\n");
   for(int j = 0; j < nchild; j++) {
+		// printf("count\n");
     pid = fork();
     if(pid < 0){
       printf("FAILED: fork failed\n");
@@ -160,6 +165,7 @@ concur(void)
       for(i = 0; i < 100; i++){
         x = x * 1103515245 + 12345;
         if((x % 3) == 0) {
+					// printf("count\n");
           symlink("/testsymlink/z", "/testsymlink/y");
           if (stat_slink("/testsymlink/y", &st) == 0) {
             m++;

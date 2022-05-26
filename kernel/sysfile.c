@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "buf.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -297,31 +298,68 @@ sys_open(void)
 
   begin_op();
 
-  if(omode & O_CREATE){
+  if(omode & O_CREATE){ // 需要创建文件
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
+    if((ip = namei(path)) == 0){ // 找到路径对应的文件的inode
       end_op();
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+    if(ip->type == T_DIR && omode != O_RDONLY){ // 对目录文件检查 
       iunlockput(ip);
       end_op();
       return -1;
     }
   }
-
+	// 对设备文件进行检查
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
     return -1;
   }
 
+	int count = 0;
+	while (ip->type == T_SYMLINK) {
+		count ++;
+		if (count > 10) {
+			iunlockput(ip);
+			end_op();
+			return -1;
+		}
+		// printf("dead loop\n");
+		char linkpath[MAXPATH];
+		struct inode *tmp_ip;
+		struct buf *bp;
+		if (ip->addrs[0] == 0) {
+			iunlockput(ip);
+			end_op();
+			return -1;
+		}
+		bp = bread(ip->dev, ip->addrs[0]);
+		memmove(linkpath, bp->data, MAXPATH);
+		brelse(bp);
+
+		if ((tmp_ip = namei(linkpath)) == 0) {
+			iunlockput(ip);
+			end_op();
+			return -1;	
+		}	
+		if (omode & O_NOFOLLOW) {
+			break;	
+		} else {
+			iunlockput(ip);
+			ip = tmp_ip;
+			ilock(ip);
+		}
+	}
+
+
+	// 分配一个file结构体 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
@@ -329,7 +367,7 @@ sys_open(void)
     end_op();
     return -1;
   }
-
+	// 完善file结构体
   if(ip->type == T_DEVICE){
     f->type = FD_DEVICE;
     f->major = ip->major;
@@ -484,3 +522,47 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+symlink(char target[], char linkpath[])
+{
+  struct inode *ip;
+  struct buf *bp;
+  uint addr;
+	ip = create(linkpath, T_SYMLINK, 0, 0); // 申请一个inode用来存新的符号链接文件.create中已经获得了锁
+	// ilock(ip);
+	if (ip == 0) {
+		// iunlockput(ip);
+		end_op();
+		return -1;
+	}
+	// ilock(ip);
+  if ((addr = ip->addrs[0]) == 0)
+    ip->addrs[0] = addr = lazy_balloc(ip->dev);
+  bp = bread(ip->dev, addr);
+  memmove(bp->data, target, MAXPATH);
+  iupdate(ip); // 将这个inode存盘
+	iunlockput(ip);
+  log_write(bp); // 将这个block存盘
+  brelse(bp);
+
+	end_op();
+  return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH];
+	char linkpath[MAXPATH];
+
+	if (argstr(0, target, MAXPATH) < 0 || argstr(1, linkpath, MAXPATH) < 0)
+		return -1;
+
+	begin_op();
+	int res = symlink(target, linkpath);
+	// end_op();
+	return res;
+}
+
+
