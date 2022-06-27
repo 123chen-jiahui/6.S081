@@ -80,6 +80,23 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+/*
+struct range {
+  uint64 range_begin;
+  int len;
+};
+*/
+
+struct VMA {
+  // struct range *range_list;
+  uint64 begin;
+  int mapped;
+  int len;
+  int prot;
+  int flags;
+  struct file *f;
+};
+
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -103,4 +120,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct VMA VMAs[16];
 };

@@ -484,3 +484,40 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  // 获取4个参数(addr默认就是0)
+  uint64 addr;
+  int len, prot, flags, offset;
+  struct file *f;
+
+  if (argint(1, &len) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0 || argint(5, &offset) < 0)
+    return -1;
+  
+  len = PGROUNDUP(len); // mmap中映射的长度必须是页对齐的
+
+  for (int i = 0; i < 16; i ++) {
+    if (myproc()->VMAs[i].mapped == 0) {
+      myproc()->VMAs[i].begin = myproc()->sz;
+      myproc()->VMAs[i].mapped = 1;
+      myproc()->VMAs[i].len = len;
+      myproc()->VMAs[i].prot = prot;
+      myproc()->VMAs[i].flags = flags;
+      myproc()->VMAs[i].f = f;
+	  filedup(f);
+
+      addr = myproc()->sz;
+      myproc()->sz += len; // lazy allocation
+      return addr;
+	}
+  }	  
+  return -1; // 没有足够的VMA
+}
+
+uint64
+sys_munmap(void)
+{
+	return -1;
+}

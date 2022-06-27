@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,6 +71,49 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 13) { // 虚拟地址没有映射
+    if (r_stval() >= p->sz || r_stval() <= p->trapframe->sp) {
+      p->killed = 1;
+    } else {
+      uint64 va = PGROUNDDOWN(r_stval()); // 出错的虚拟地址
+      // 找到对应的VMA
+      struct VMA *tmp;
+      int i;
+      for (i = 0; i < 16; i ++) {
+        tmp = &(p->VMAs[i]);
+        if (tmp->mapped == 1 && (va >= tmp->begin && va < (tmp->begin + tmp->len)))
+          break;
+      }
+      if (i >= 16) // 没找到，说明va不正确
+        p->killed = 1;
+      else {
+        uint64 pa = (uint64)kalloc(); // 分配一页物理地址
+        if (pa == 0) {
+          p->killed = 1;
+        } else {
+          memset((void *)pa, 0, PGSIZE);
+          int read = 0, write = 0;	
+          read = (tmp->prot & PROT_READ);
+          if (read)
+            read = PTE_R;
+          write = (tmp->prot & PROT_WRITE);
+          if (write)
+            write = PTE_W;
+          // printf("%d %d\n", read, write);
+          ilock(tmp->f->ip); // 由于readi要求ip必须上锁
+          int n = PGSIZE < (tmp->begin + tmp->len - va) ? PGSIZE : (tmp->begin + tmp->len - va);
+          readi(tmp->f->ip, 0, pa, va - tmp->begin, n);
+          iunlock(tmp->f->ip);
+          // 将虚拟地址映射到物理地址
+          // printf("hello world\n");
+          if (mappages(p->pagetable, va, PGSIZE, pa, PTE_U | read | write) != 0) {
+            kfree((void *)pa);
+            p->killed = 1;
+          }
+          // printf("hi\n");
+        }
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
