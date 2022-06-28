@@ -493,31 +493,146 @@ sys_mmap(void)
   int len, prot, flags, offset;
   struct file *f;
 
-  if (argint(1, &len) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0 || argint(5, &offset) < 0)
+  if (argint(1, &len) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0 || argint(5, &offset) < 0) {
     return -1;
+  }
+
+  // 这里加一个特判，如果文件打开方式是只读，而映射方式是可写的
+  // 并且能写回文件，那么就映射失败
+  if (f->writable == 0 && (prot & PROT_WRITE) && (flags & MAP_SHARED)) {
+    return -1;
+  }
   
   len = PGROUNDUP(len); // mmap中映射的长度必须是页对齐的
 
   for (int i = 0; i < 16; i ++) {
     if (myproc()->VMAs[i].mapped == 0) {
       myproc()->VMAs[i].begin = myproc()->sz;
+      myproc()->VMAs[i].mark = myproc()->sz;
       myproc()->VMAs[i].mapped = 1;
       myproc()->VMAs[i].len = len;
       myproc()->VMAs[i].prot = prot;
       myproc()->VMAs[i].flags = flags;
       myproc()->VMAs[i].f = f;
-	  filedup(f);
+      filedup(f);
 
       addr = myproc()->sz;
       myproc()->sz += len; // lazy allocation
       return addr;
-	}
+    }
   }	  
   return -1; // 没有足够的VMA
 }
 
 uint64
+munmap(uint64 addr, int len)
+{
+  addr = PGROUNDDOWN(addr); // addr向下页对齐
+  len = PGROUNDUP(len); // len向上页对齐
+
+  // struct proc *p = myproc();
+  // printf("%d %d\n", p->VMAs[0].begin, p->VMAs[0].len);
+  // 检查addr和len是否在合理范围内
+  struct VMA *tmp;
+  int i;
+  for (i = 0; i < 16; i ++) {
+    tmp = &(myproc()->VMAs[i]);
+    if (tmp->mapped && addr >= tmp->begin && addr < tmp->begin + len && addr + len <= tmp->begin + tmp->len)
+      break;
+  }
+  if (i >= 16) {
+    printf("giao\n");
+    return -1;
+  }
+
+  // 到这里说明范围检查合格了
+
+  // 一个VMA最多被截成3段(begin0,len0),(begin1,len1),(begin2,len2)
+  uint64 new_begin[3];
+  int new_len[3];
+  // 暂存被截VMA的信息
+  uint64 tmp_mark = tmp->mark;
+  int tmp_prot = tmp->prot, tmp_flags = tmp->flags;
+  struct file *tmp_f = tmp->f;
+  new_begin[0] = tmp->begin;
+  new_begin[1] = addr;
+  new_begin[2] = addr + len;
+  new_len[0] = new_begin[1] - new_begin[0];
+  new_len[1] = len;
+  new_len[2] = tmp->begin + tmp->len - new_begin[2];
+  // for (int i = 0; i < 3; i ++)
+    // printf("%d %d\n", new_begin[i], new_len[i]);
+  // 将原来的VMA清零
+  memset(tmp, 0, sizeof(struct VMA));
+  // 转移
+  for (i = 0; i < 3; i ++) {
+    if (new_len[i] == 0 || i == 1)
+      continue;
+    int j;
+    for (j = 0; j < 16; j ++) {
+      tmp = &(myproc()->VMAs[j]);
+      if (tmp->mapped == 0) {
+        tmp->mapped = 1;
+        tmp->begin = new_begin[i];
+        tmp->mark = tmp_mark;
+        tmp->len = new_len[i];
+        tmp->prot = tmp_prot;
+        tmp->flags = tmp_flags;
+        tmp->f = tmp_f;		
+        break;
+      }	  
+    }
+    if (j >= 16) {
+      printf("giaogiao\n");
+      return -1; // 正常来说，这一句不会被执行到;
+    }
+  }
+  // 检查MAP_SHARED，若是，则写回文件
+  if (tmp_flags == MAP_SHARED) {
+    if (tmp_f->writable == 0)
+      return -1;
+    
+    int r;
+    int off = addr - tmp_mark;
+    int max = ((MAXOPBLOCKS - 1 - 1 - 2) / 2) * BSIZE;
+    int i = 0;
+    while (i < len) {
+      int n1 = len - i;
+      if (n1 > max)
+        n1 = max;
+
+      begin_op();
+      ilock(tmp_f->ip);
+      if ((r = writei(tmp_f->ip, 1, addr + i, off, n1)) > 0)
+        off += r;
+      iunlock(tmp_f->ip);
+      end_op();
+
+      if (r != n1) {
+        break;
+      }
+      i += r;
+    }	
+  }
+
+  // 取消引用
+  uvmunmap(myproc()->pagetable, addr, len / PGSIZE, 1);
+  // 如果全部都被取消映射了，则file的引用计数-1
+  for (i = 0; i < 16; i ++) {
+    if (myproc()->VMAs[i].mark == tmp_mark)
+      break;
+  }
+  if (i >= 16)
+    filedec(tmp_f);
+  return 1;
+}
+
+uint64
 sys_munmap(void)
 {
-	return -1;
+  uint64 addr;
+  int len;
+  if (argaddr(0, &addr) < 0 || argint(1, &len) < 0) 
+    return -1;
+  return munmap(addr, len);
 }

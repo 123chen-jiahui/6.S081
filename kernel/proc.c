@@ -274,6 +274,28 @@ fork(void)
     return -1;
   }
 
+  // LAB MMAP
+  struct VMA *tmp;
+  struct file *all_file[16];
+  int count = 0;
+  memset(all_file, 0, sizeof(struct file *) * 16);
+  for (int i = 0; i < 16; i ++) {
+    tmp = &(p->VMAs[i]);
+    if (tmp->mapped) {
+      memmove(&(np->VMAs[i]), tmp, sizeof(struct VMA)); // 复制VMA
+
+      int j;
+      for (j = 0; j < count; j ++) {
+        if (all_file[j] == tmp->f) // 已经找到过了
+          break;
+	  } 
+      if (j >= count) { // 没有找到过
+        filedup(tmp->f); // 增加引用计数
+        all_file[count ++] = tmp->f; // 将其放入集合
+      }
+    }
+  }
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -350,6 +372,16 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  // LAB MMAP
+  // munmap all mmapped address
+  struct VMA *tmp;
+  for (int i = 0; i < 16; i ++) {
+    tmp = &(p->VMAs[i]);
+    if (tmp->mapped) {
+      munmap(tmp->begin, tmp->len);
     }
   }
 

@@ -29,6 +29,7 @@ int             exec(char*, char**);
 struct file*    filealloc(void);
 void            fileclose(struct file*);
 struct file*    filedup(struct file*);
+struct file*    filedec(struct file*);
 void            fileinit(void);
 int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
@@ -131,6 +132,9 @@ char*           safestrcpy(char*, const char*, int);
 int             strlen(const char*);
 int             strncmp(const char*, const char*, uint);
 char*           strncpy(char*, const char*, int);
+
+// sysfile.c
+uint64          munmap(uint64, int);
 
 // syscall.c
 int             argint(int, int*);

@@ -80,16 +80,9 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
-/*
-struct range {
-  uint64 range_begin;
-  int len;
-};
-*/
-
 struct VMA {
-  // struct range *range_list;
   uint64 begin;
+  uint64 mark; // 标识位
   int mapped;
   int len;
   int prot;
